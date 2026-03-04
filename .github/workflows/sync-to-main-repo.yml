@@ -1,0 +1,60 @@
+name: Sync to main-repo on PR Merge
+
+on:
+  push:
+    branches:
+      - main  # Triggers whenever a merge into main branch happens
+
+jobs:
+  sync:
+    name: Copy & Replace contents into main-repo
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout the source repo (databricks-test) - full history
+      - name: Checkout databricks-test (source)
+        uses: actions/checkout@v4
+        with:
+          path: source-repo
+          fetch-depth: 0
+
+      # Step 2: Checkout the destination repo (main-repo) using a PAT
+      - name: Checkout main-repo (destination)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/main-repo  # e.g. my-org/main-repo
+          token: ${{ secrets.SYNC_PAT }}                        # Personal Access Token (see setup guide below)
+          path: dest-repo
+          fetch-depth: 0
+
+      # Step 3: Wipe everything in dest-repo (except .git) and copy source contents
+      - name: Sync contents from databricks-test to main-repo
+        run: |
+          echo "==> Clearing destination repo contents..."
+          find dest-repo -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+
+          echo "==> Copying source repo contents to destination..."
+          rsync -av --exclude='.git' source-repo/ dest-repo/
+
+          echo "==> Done syncing."
+
+      # Step 4: Commit and push if there are any changes
+      - name: Commit and push changes to main-repo
+        run: |
+          cd dest-repo
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+
+          # Only commit if there are actual changes
+          if git diff --cached --quiet; then
+            echo "No changes to sync. Skipping commit."
+          else
+            COMMIT_SHA="${{ github.sha }}"
+            COMMIT_MSG="${{ github.event.head_commit.message }}"
+            git commit -m "sync: ${COMMIT_MSG} (from databricks-test@${COMMIT_SHA:0:7})"
+            git push origin main
+            echo "Successfully synced to main-repo."
+          fi
